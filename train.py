@@ -13,8 +13,53 @@ from apollocaffe.layers import (Power, LstmUnit, Convolution, NumpyData,
                                 Softmax, Concat, Dropout, InnerProduct)
 
 from utils import (annotation_jitter, image_to_h5,
-                   annotation_to_h5, load_data_mean)
+                   annotation_to_h5, load_data_mean, Rect, stitch_rects)
 from utils.annolist import AnnotationLib as al
+
+def overlap_union(x1,y1,x2,y2,x3,y3,x4,y4):
+    SI = max(0, min(x2,x4)-max(x1,x3)) * max(0, min(y2,y4)-max(y1,y3))
+    SU = (x2-x1)*(y2-y1) + (x4-x3)*(y4-y3) - SI + 0.0
+    return SI/SU
+
+def get_accuracy(net, inputs, net_config):
+    bbox_list, conf_list = forward(net, inputs, net_config, True)
+    anno = inputs['anno']
+    count = 0.0
+    for r in anno:
+        count += 1
+    pix_per_w = net_config["img_width"]/net_config["grid_width"]
+    pix_per_h = net_config["img_height"]/net_config["grid_height"]
+
+    all_rects = [[[] for x in range(net_config["grid_width"])] for y in range(net_config["grid_height"])]
+    for n in range(len(bbox_list)):
+        for k in range(net_config["grid_height"] * net_config["grid_width"]):
+            y = int(k / net_config["grid_width"])
+            x = int(k % net_config["grid_width"])
+            bbox = bbox_list[n][k]
+            conf = conf_list[n][k,1].flatten()[0]
+            abs_cx = pix_per_w/2 + pix_per_w*x + int(bbox[0,0,0])
+            abs_cy = pix_per_h/2 + pix_per_h*y+int(bbox[1,0,0])
+            w = bbox[2,0,0]
+            h = bbox[3,0,0]
+            all_rects[y][x].append(Rect(abs_cx,abs_cy,w,h,conf))
+
+    acc_rects = stitch_rects(all_rects, net_config)
+    count_cover = 0.0
+    for rect in acc_rects:
+        if rect.true_confidence < 0.9:
+            continue
+        else:
+            x1 = rect.cx - rect.width/2.
+            x2 = rect.cx + rect.width/2.
+            y1 = rect.cy - rect.height/2.
+            y2 = rect.cy + rect.height/2.
+            for r in anno:
+                o_u = overlap_union(x1,y1,x2,y2, r.x1,r.y1,r.x2,r.y2)
+                if o_u >= 0.5:
+                    count_cover += 1
+                    break
+
+    return (count_cover,count)
 
 def load_idl(idlfile, data_mean, net_config, jitter=True):
     """Take the idlfile, data mean and net configuration and create a generator
@@ -41,7 +86,7 @@ def load_idl(idlfile, data_mean, net_config, jitter=True):
                 jit_anno, net_config["grid_width"], net_config["grid_height"],
                 net_config["region_size"], net_config["max_len"])
             yield {"imname": anno.imageName, "raw": jit_image, "image": image,
-                   "boxes": boxes, "box_flags": box_flags}
+                   "boxes": boxes, "box_flags": box_flags, 'anno': jit_anno}
 
 def generate_decapitated_googlenet(net, net_config):
     """Generates the googlenet layers until the inception_5b/output.
@@ -208,9 +253,9 @@ def forward(net, input_data, net_config, deploy=False):
         generate_losses(net, net_config)
 
     if deploy:
-        bbox = [np.array(net.blobs["ip_bbox%d" % j].data)
+        bbox = [np.array(net.blobs["ip_bbox%d" % j].data)           # [(300,4,1,1)] * 5
                 for j in range(net_config["max_len"])]
-        conf = [np.array(net.blobs["ip_soft_conf%d" % j].data)
+        conf = [np.array(net.blobs["ip_soft_conf%d" % j].data)      # [(300,2,1,1)] * 5
                 for j in range(net_config["max_len"])]
         return (bbox, conf)
     else:
@@ -234,7 +279,7 @@ def train(config):
     input_gen = load_idl(data_config["train_idl"],
                               image_mean, net_config)
     input_gen_test = load_idl(data_config["test_idl"],
-                                   image_mean, net_config)
+                                   image_mean, net_config, jitter=False)
 
     forward(net, input_gen.next(), config["net"])
     net.draw_to_file(logging["schematic_path"])
@@ -257,9 +302,16 @@ def train(config):
         if i % solver["test_interval"] == 0:
             net.phase = 'test'
             test_loss = []
+            cc_list = []
+            c_list = []
             for _ in range(solver["test_iter"]):
-                forward(net, input_gen_test.next(), config["net"], False)
+                input_en = input_gen_test.next()
+                forward(net, input_en, config["net"], False)
                 test_loss.append(net.loss)
+                (count_cover,count) = get_accuracy(net, input_en, config['net'])
+                cc_list.append(count_cover)
+                c_list.append(count)
+            print np.sum(cc_list)/np.sum(c_list)
             loss_hist["test"].append(np.mean(test_loss))
             net.phase = 'train'
         forward(net, input_gen.next(), config["net"])
