@@ -1,14 +1,14 @@
 {
     "data": {
-        "test_idl": "./data/brainwash/brainwash_val.idl",
-        "train_idl": "./data/brainwash/brainwash_train.idl",
+        "test_idl": "/home/pig/apollocaffe/data/end_to_end_people_detection/label_list_640_480.test.idl",
+        "train_idl": "/home/pig/apollocaffe/data/end_to_end_people_detection/label_list_640_480.train.idl",
         "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
         "base_lr": 0.2,
-        "max_iter": 800001,
-        "test_iter": 100,
-        "test_interval": 1000,
+        "max_iter": 10001,
+        "test_iter": 30,
+        "test_interval": 500,
         "momentum": 0.5,
         "random_seed": 2,
         "clip_gradients": 0.1,
@@ -18,11 +18,11 @@
     },
     "logging": {
         "display_interval": 100,
-        "snapshot_prefix": "/tmp/reinspect",
+        "snapshot_prefix": "/home/pig/ReInspect/tmp/reinspect",
         "snapshot_interval": 10000,
-        "schematic_path": "/tmp/reinspect.png",
-        "graph_prefix": "/tmp/history",
-        "log_file": "/tmp/log_brainwash.txt",
+        "schematic_path": "/home/pig/ReInspect/tmp/reinspect.png",
+        "graph_prefix": "/home/pig/ReInspect/tmp/history",
+        "log_file": "/home/pig/ReInspect/tmp/log_brainwash.txt",
         "graph_interval": 500
     },
     "net": {

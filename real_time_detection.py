@@ -85,12 +85,13 @@ def forward_test(net, inputs, net_config):
     	return img
 
 def updatefig(*args):
-    im.set_array(forward_test(net, input_gen.next(), config["net"]))
+    new_frame = forward_test(net, input_gen.next(), config["net"])
+    im.set_array(new_frame)
+    output_video.write(new_frame)
     return im,
 
+# load video 
 config = json.load(open("config.json", 'r'))
-apollocaffe.set_random_seed(config["solver"]["random_seed"])
-apollocaffe.set_device(0)
 data_mean = load_data_mean(config["data"]["idl_mean"], 
                            config["net"]["img_width"], 
                            config["net"]["img_height"], image_scaling=1.0)
@@ -98,10 +99,17 @@ data_mean = load_data_mean(config["data"]["idl_mean"],
 video_file = r'/home/pig/apollocaffe/data/end_to_end_people_detection/Video2.mp4'
 input_gen = load_video_file(video_file, config["net"], data_mean)
 
+# init apollocaffe
+apollocaffe.set_random_seed(config["solver"]["random_seed"])
+apollocaffe.set_device(0)
 net = apollocaffe.ApolloNet()
 net.phase = 'test'
 forward(net, input_gen.next(), config["net"], True)
-net.load("/tmp/reinspect_10000.h5")
+net.load("/home/pig/ReInspect/tmp/reinspect_10000.h5")
+
+# init output video
+fourcc = cv2.cv.CV_FOURCC(*'XVID')
+output_video = cv2.VideoWriter('output.avi',fourcc, 20.0, (config["net"]["img_width"],config["net"]["img_height"]))
 
 
 
