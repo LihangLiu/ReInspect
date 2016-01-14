@@ -1,11 +1,13 @@
 """train.py is used to generate and train the
 ReInspect deep network architecture."""
 
+import cv2
 import numpy as np
 import json
 import os
 import random
 from scipy.misc import imread
+import caffe
 import apollocaffe
 from apollocaffe.models import googlenet
 from apollocaffe.layers import (Power, LstmUnit, Convolution, NumpyData,
@@ -15,6 +17,7 @@ from apollocaffe.layers import (Power, LstmUnit, Convolution, NumpyData,
 from utils import (annotation_jitter, image_to_h5,
                    annotation_to_h5, load_data_mean, Rect, stitch_rects)
 from utils.annolist import AnnotationLib as al
+from utils.annolist.AnnotationLib import Annotation, AnnoRect
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -23,12 +26,12 @@ def overlap_union(x1,y1,x2,y2,x3,y3,x4,y4):
     SU = (x2-x1)*(y2-y1) + (x4-x3)*(y4-y3) - SI + 0.0
     return SI/SU
 
-def get_accuracy(net, inputs, net_config):
+def get_accuracy(net, inputs, net_config, threshold = 0.9):
     bbox_list, conf_list = forward(net, inputs, net_config, True)
     anno = inputs['anno']
-    count = 0.0
+    count_anno = 0.0
     for r in anno:
-        count += 1
+        count_anno += 1
     pix_per_w = net_config["img_width"]/net_config["grid_width"]
     pix_per_h = net_config["img_height"]/net_config["grid_height"]
 
@@ -43,25 +46,34 @@ def get_accuracy(net, inputs, net_config):
             abs_cy = pix_per_h/2 + pix_per_h*y+int(bbox[1,0,0])
             w = bbox[2,0,0]
             h = bbox[3,0,0]
+            if conf < threshold:
+                continue
             all_rects[y][x].append(Rect(abs_cx,abs_cy,w,h,conf))
 
     acc_rects = stitch_rects(all_rects, net_config)
     count_cover = 0.0
+    count_error = 0.0
+    count_pred = 0.0
     for rect in acc_rects:
-        if rect.true_confidence < 0.9:
+        if rect.true_confidence < threshold:
             continue
         else:
+            count_pred += 1
             x1 = rect.cx - rect.width/2.
             x2 = rect.cx + rect.width/2.
             y1 = rect.cy - rect.height/2.
             y2 = rect.cy + rect.height/2.
+            iscover = False
             for r in anno:
-                o_u = overlap_union(x1,y1,x2,y2, r.x1,r.y1,r.x2,r.y2)
-                if o_u >= 0.5:
-                    count_cover += 1
+                if overlap_union(x1,y1,x2,y2, r.x1,r.y1,r.x2,r.y2) >= 0.5:
+                    iscover = True
                     break
+            if iscover:
+                count_cover += 1
+            else:
+                count_error += 1
 
-    return (count_cover,count)
+    return (count_cover, count_error, count_anno, count_pred)
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -106,7 +118,7 @@ def generate_deploy_inputs(imname, data_mean, net_config):
     image = image_to_h5(raw_image, data_mean, image_scaling=1.0)
     return {"imname": imname, "raw": raw_image, "image": image}
 
-def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, jitter=True):
+def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, threshold=0.9, jitter=True):
     annos = []
     pix_per_w = net_config["img_width"]/net_config["grid_width"]
     pix_per_h = net_config["img_height"]/net_config["grid_height"]
@@ -127,17 +139,19 @@ def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, jitter=True)
                 abs_cy = pix_per_h/2 + pix_per_h*y+int(bbox[1,0,0])
                 w = bbox[2,0,0]
                 h = bbox[3,0,0]
+                if conf < threshold:
+                    continue
                 all_rects[y][x].append(Rect(abs_cx,abs_cy,w,h,conf))
 
         acc_rects = stitch_rects(all_rects, net_config)
         for rect in acc_rects:
-            if rect.true_confidence >= 0.9:
-                rect = AnnoRect()
-                rect.x1 = rect.cx - rect.width/2.
-                rect.x2 = rect.cx + rect.width/2.
-                rect.y1 = rect.cy - rect.height/2.
-                rect.y2 = rect.cy + rect.height/2.
-                anno.rects.append(rect)
+            if rect.true_confidence >= threshold:
+                r = AnnoRect()
+                r.x1 = rect.cx - rect.width/2.
+                r.x2 = rect.cx + rect.width/2.
+                r.y1 = rect.cy - rect.height/2.
+                r.y2 = rect.cy + rect.height/2.
+                anno.rects.append(r)
         annos.append(anno)
 
     while True:
@@ -285,7 +299,8 @@ def generate_losses(net, net_config):
             permute_matches: true
           }""" % net_config["hungarian_loss_weight"])
     net.f(SoftmaxWithLoss("box_loss",
-                          bottoms=["score_concat", "box_confidences"]))
+                          bottoms=["score_concat", "box_confidences"],
+                          ignore_label=0))
 
 def forward(net, input_data, net_config, deploy=False):
     """Defines and creates the ReInspect network given the net, input data
@@ -350,6 +365,8 @@ def train(config):
 
     test_gen = load_idl(data_config["test_idl"],
                                    image_mean, net_config, jitter=False)
+    boot_imname_list = load_imname_list(data_config['bootstrap_idl'])
+    boot_train_gen = 0
 
     # init apollocaffe 
     net = apollocaffe.ApolloNet()
@@ -360,42 +377,61 @@ def train(config):
         net.load(solver["weights"])
     else:
         net.load(googlenet.weights_file())
+    # init log
+    loss_hist = {"train": [], "test": []}
+    loggers = [
+        apollocaffe.loggers.TrainLogger(logging["display_interval"],
+                                        logging["log_file"]),
+        apollocaffe.loggers.TestLogger(solver["test_interval"],
+                                       logging["log_file"]),
+        apollocaffe.loggers.SnapshotLogger(logging["snapshot_interval"],
+                                           logging["snapshot_prefix"]),
+        ]
 
     # bootstrap
-    boot_imname_list = load_imname_list(data_config['bootstrap_idl'])
-    boot_train_gen = 0
     for i in range(solver["start_iter"], solver["max_iter"]):
+        # test
         if i % solver["test_interval"] == 0:
-            # test
             net.phase = 'test'
             test_loss = []
             cc_list = []
-            c_list = []
+            ce_list = []
+            ca_list = []
+            cp_list = []
             for _ in range(solver["test_iter"]):
                 input_en = test_gen.next()
                 forward(net, input_en, net_config, False)
                 test_loss.append(net.loss)
-                (count_cover,count) = get_accuracy(net, input_en, net_config)
+                (count_cover,count_error,count_anno, count_pred) = get_accuracy(net, input_en, net_config)
                 cc_list.append(count_cover)
-                c_list.append(count)
-            print 'precision:', np.sum(cc_list)/np.sum(c_list)
-            print 'test loss:', np.mean(test_loss)
-            # deploy
+                ce_list.append(count_error)
+                ca_list.append(count_anno)
+                cp_list.append(count_pred)
+            loss_hist["test"].append(np.mean(test_loss))
+            print 'iterate:',i, ' precision:', np.sum(cc_list)/np.sum(ca_list)
+            print 'iterate:',i, ' error:', np.sum(ce_list)/np.sum(cp_list)
+        # deploy
+        if i % solver["bootstrap_interval"] == 0:
             boot_deploy_list = []
-            for imname in boot_imname_list:
-                inputs = generate_deploy_inputs(imname, image_mean, net_config, jitter=False)
-                (bbox, conf) = forward(net, inputs, net_config)
+            random.shuffle(boot_imname_list)                                    
+            for imname in boot_imname_list[:solver["bootstrap_interval"]]:                      # not all images are needed for bootstrap training
+                inputs = generate_deploy_inputs(imname, image_mean, net_config)
+                (bbox, conf) = forward(net, inputs, net_config, deploy=True)
                 boot_deploy_list.append({'imname':imname, 'bbox':bbox, 'conf':conf})
-            boot_train_gen = convert_deploy_2_train(boot_deploy_list)
+            boot_train_gen = convert_deploy_2_train(boot_deploy_list, image_mean, net_config)
         # train
         net.phase = 'train'
         forward(net, boot_train_gen.next(), net_config)
-        print 'train loss:', net.loss
+        loss_hist["train"].append(net.loss)
         net.backward()
         learning_rate = (solver["base_lr"] *
                          (solver["gamma"])**(i // solver["stepsize"]))
         net.update(lr=learning_rate, momentum=solver["momentum"],
                    clip_gradients=solver["clip_gradients"])
+        for logger in loggers:
+            logger.log(i, {'train_loss': loss_hist["train"],
+                           'test_loss': loss_hist["test"],
+                           'apollo_net': net, 'start_iter': 0})
 
 
 

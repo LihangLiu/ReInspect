@@ -8,6 +8,7 @@ import matplotlib.animation as animation
 
 from scipy.misc import imread
 from IPython import display
+import caffe
 import apollocaffe # Make sure that caffe is on the python path:
 
 from utils.annolist import AnnotationLib as al
@@ -21,10 +22,9 @@ def prepocessd_image(raw_img, data_mean):
 
 def load_video_file(video_file, net_config, data_mean):
 	cap = cv2.VideoCapture(video_file)
-	while not cap.isOpened():
-	    cap = cv2.VideoCapture(video_file)
-	    cv2.waitKey(1000)
-	    print "Wait for the header"
+	if not cap.isOpened():
+	    print "error open"
+	    return
 
 	pos_frame = cap.get(cv2.cv.CV_CAP_PROP_POS_FRAMES)
 	while True:
@@ -33,7 +33,8 @@ def load_video_file(video_file, net_config, data_mean):
 	        # The frame is ready and already captured
 	        #cv2.imshow('video', frame)
 	        pos_frame = cap.get(cv2.cv.CV_CAP_PROP_POS_FRAMES)
-	        raw_img = frame[-net_config['img_height']-1:-1, :net_config['img_width'], :]
+	        raw_img = frame[:net_config['img_height'], :net_config['img_width'], :]
+	        raw_img[:180, : ,:] = 0
 	        yield prepocessd_image(raw_img, data_mean)
 
 	    else:
@@ -70,6 +71,8 @@ def forward_test(net, inputs, net_config):
 		    	abs_cy = pix_per_h/2 + pix_per_h*y+int(bbox[1,0,0])
 		    	w = bbox[2,0,0]
 		    	h = bbox[3,0,0]
+			if conf < 0.9:
+				continue
 		    	all_rects[y][x].append(Rect(abs_cx,abs_cy,w,h,conf))
 
     	acc_rects = stitch_rects(all_rects, net_config)
@@ -96,7 +99,7 @@ data_mean = load_data_mean(config["data"]["idl_mean"],
                            config["net"]["img_width"], 
                            config["net"]["img_height"], image_scaling=1.0)
 
-video_file = r'/home/pig/apollocaffe/data/end_to_end_people_detection/Video2.mp4'
+video_file = r'./second_carteen/pre_data/2015_1230_115055_027.MOV'
 input_gen = load_video_file(video_file, config["net"], data_mean)
 
 # init apollocaffe
@@ -105,7 +108,8 @@ apollocaffe.set_device(0)
 net = apollocaffe.ApolloNet()
 net.phase = 'test'
 forward(net, input_gen.next(), config["net"], True)
-net.load("/home/pig/ReInspect/tmp/reinspect_10000.h5")
+# net.load("./data/brainwash_800000.h5")
+net.load("./tmp/bootstrap_10.h5")
 
 # init output video
 fourcc = cv2.cv.CV_FOURCC(*'XVID')

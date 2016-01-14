@@ -1,0 +1,44 @@
+{
+    "data": {
+        "test_idl": "./second_carteen/annnotation/test.idl",
+        "bootstrap_idl": "./second_carteen/pre_data/image_list.txt",
+        "idl_mean": "./data/brainwash_mean.npy"
+    },
+    "solver": {
+        "base_lr": 0.2,
+        "max_iter": 10000,
+        "test_iter": 100,
+        "test_interval": 5,
+        "bootstrap_interval": 5,
+        "momentum": 0.5,
+        "random_seed": 2,
+        "clip_gradients": 0.1,
+        "gamma": 0.8,
+        "stepsize": 100000,
+        "weights": ""
+    },
+    "logging": {
+        "display_interval": 5,
+        "snapshot_prefix": "./tmp/bootstrap",
+        "snapshot_interval": 10,
+        "schematic_path": "./tmp/bootstrap.png",
+        "graph_prefix": "./tmp/history",
+        "log_file": "./tmp/log_bootstrap.txt",
+        "graph_interval": 500
+    },
+    "net": {
+        "init_range": 0.1,
+        "max_len": 5,
+        "lstm_num_cells": 250,
+        "dropout_ratio": 0.15,
+        "hungarian_match_ratio": 0.5,
+        "hungarian_permute_matches": true,
+        "hungarian_loss_weight": 0.03,
+        "googlenet_lr_mult": 4,
+        "grid_height": 15,
+        "grid_width": 20,
+        "img_height": 480,
+        "img_width": 640,
+        "region_size": 64
+    }
+}
