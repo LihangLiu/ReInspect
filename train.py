@@ -4,8 +4,10 @@ ReInspect deep network architecture."""
 import numpy as np
 import json
 import os
+import cv2
 import random
 from scipy.misc import imread
+import caffe
 import apollocaffe
 from apollocaffe.models import googlenet
 from apollocaffe.layers import (Power, LstmUnit, Convolution, NumpyData,

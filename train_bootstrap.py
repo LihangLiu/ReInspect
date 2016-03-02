@@ -4,8 +4,10 @@ ReInspect deep network architecture."""
 import cv2
 import numpy as np
 import json
+import math
 import os
 import random
+import itertools
 from scipy.misc import imread
 import caffe
 import apollocaffe
@@ -104,6 +106,7 @@ def load_idl(idlfile, data_mean, net_config, jitter=True):
             yield {"imname": anno.imageName, "raw": jit_image, "image": image,
                    "boxes": boxes, "box_flags": box_flags, 'anno': jit_anno}
 
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def load_imname_list(imfile):
@@ -147,10 +150,10 @@ def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, threshold=0.
         for rect in acc_rects:
             if rect.true_confidence >= threshold:
                 r = AnnoRect()
-                r.x1 = rect.cx - rect.width/2.
-                r.x2 = rect.cx + rect.width/2.
-                r.y1 = rect.cy - rect.height/2.
-                r.y2 = rect.cy + rect.height/2.
+                r.x1 = int(rect.cx - rect.width/2.)
+                r.x2 = int(rect.cx + rect.width/2.)
+                r.y1 = int(rect.cy - rect.height/2.)
+                r.y2 = int(rect.cy + rect.height/2.)
                 anno.rects.append(r)
         annos.append(anno)
 
@@ -300,7 +303,7 @@ def generate_losses(net, net_config):
           }""" % net_config["hungarian_loss_weight"])
     net.f(SoftmaxWithLoss("box_loss",
                           bottoms=["score_concat", "box_confidences"],
-                          ignore_label=0))
+                          ignore_label=net_config["ignore_label"]))
 
 def forward(net, input_data, net_config, deploy=False):
     """Defines and creates the ReInspect network given the net, input data
@@ -353,7 +356,7 @@ def train(config):
     """Trains the ReInspect model using SGD with momentum
     and prints out the logging information."""
 
-    # init arguments
+    # # # init arguments # # #
     net_config = config["net"]
     data_config = config["data"]
     solver = config["solver"]
@@ -363,21 +366,29 @@ def train(config):
         data_config["idl_mean"], net_config["img_width"],
         net_config["img_height"], image_scaling=1.0)
 
-    test_gen = load_idl(data_config["test_idl"],
+    # # # load image data # # # 
+    re_train_gen = load_idl(data_config["reinspect_train_idl"],
+                                   image_mean, net_config, jitter=False)
+    boot_test_gen = load_idl(data_config["bootstrap_test_idl"],
                                    image_mean, net_config, jitter=False)
     boot_imname_list = load_imname_list(data_config['bootstrap_idl'])
-    boot_train_gen = 0
 
-    # init apollocaffe 
-    net = apollocaffe.ApolloNet()
-    forward(net, test_gen.next(), net_config)
-    net.draw_to_file(logging["schematic_path"])
 
+    # # # init apollocaffe # # # 
+    # bootstrap net
+    boot_net = apollocaffe.ApolloNet()
+    net_config["ignore_label"] = 0
+    forward(boot_net, boot_test_gen.next(), net_config)
     if solver["weights"]:
-        net.load(solver["weights"])
+        boot_net.load(solver["weights"])
     else:
-        net.load(googlenet.weights_file())
-    # init log
+        boot_net.load(googlenet.weights_file())
+    # reinspect net
+    re_net = apollocaffe.ApolloNet()
+    net_config["ignore_label"] = 1
+    forward(re_net, boot_test_gen.next(), net_config) 
+
+    # # # init log # # # 
     loss_hist = {"train": [], "test": []}
     loggers = [
         apollocaffe.loggers.TrainLogger(logging["display_interval"],
@@ -388,21 +399,21 @@ def train(config):
                                            logging["snapshot_prefix"]),
         ]
 
-    # bootstrap
+    # # #  bootstrap # # # 
     for i in range(solver["start_iter"], solver["max_iter"]):
         # test
         if i % solver["test_interval"] == 0:
-            net.phase = 'test'
+            boot_net.phase = 'test'
             test_loss = []
             cc_list = []
             ce_list = []
             ca_list = []
             cp_list = []
             for _ in range(solver["test_iter"]):
-                input_en = test_gen.next()
-                forward(net, input_en, net_config, False)
-                test_loss.append(net.loss)
-                (count_cover,count_error,count_anno, count_pred) = get_accuracy(net, input_en, net_config)
+                input_en = boot_test_gen.next()
+                forward(boot_net, input_en, net_config, False)
+                test_loss.append(boot_net.loss)
+                (count_cover,count_error,count_anno, count_pred) = get_accuracy(boot_net, input_en, net_config)
                 cc_list.append(count_cover)
                 ce_list.append(count_error)
                 ca_list.append(count_anno)
@@ -416,23 +427,34 @@ def train(config):
             random.shuffle(boot_imname_list)                                    
             for imname in boot_imname_list[:solver["bootstrap_interval"]]:                      # not all images are needed for bootstrap training
                 inputs = generate_deploy_inputs(imname, image_mean, net_config)
-                (bbox, conf) = forward(net, inputs, net_config, deploy=True)
+                (bbox, conf) = forward(boot_net, inputs, net_config, deploy=True)
                 boot_deploy_list.append({'imname':imname, 'bbox':bbox, 'conf':conf})
-            boot_train_gen = convert_deploy_2_train(boot_deploy_list, image_mean, net_config)
+            thres = 0.9
+            boot_train_gen = convert_deploy_2_train(boot_deploy_list, image_mean, net_config, threshold=thres)
         # train
-        net.phase = 'train'
-        forward(net, boot_train_gen.next(), net_config)
-        loss_hist["train"].append(net.loss)
-        net.backward()
         learning_rate = (solver["base_lr"] *
                          (solver["gamma"])**(i // solver["stepsize"]))
-        net.update(lr=learning_rate, momentum=solver["momentum"],
+
+        re_net.phase = "train"
+        re_net.copy_params_from(boot_net)
+        for _ in range(1):
+            forward(re_net, re_train_gen.next(), net_config)
+            re_net.backward()
+            re_net.update(lr=learning_rate, momentum=solver["momentum"],
+                       clip_gradients=solver["clip_gradients"])
+
+        boot_net.copy_params_from(re_net)
+        boot_net.phase = 'train'
+        forward(boot_net, boot_train_gen.next(), net_config)
+        loss_hist["train"].append(boot_net.loss)
+        if not math.isnan(boot_net.loss):
+            boot_net.backward()
+        boot_net.update(lr=learning_rate, momentum=solver["momentum"],
                    clip_gradients=solver["clip_gradients"])
         for logger in loggers:
             logger.log(i, {'train_loss': loss_hist["train"],
                            'test_loss': loss_hist["test"],
-                           'apollo_net': net, 'start_iter': 0})
-
+                           'apollo_net': boot_net, 'start_iter': 0})
 
 
 def main():

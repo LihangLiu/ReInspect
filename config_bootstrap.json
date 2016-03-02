@@ -1,6 +1,7 @@
 {
     "data": {
-        "test_idl": "./second_carteen/annnotation/test.idl",
+        "reinspect_train_idl": "./data/brainwash/brainwash_train.idl",
+        "bootstrap_test_idl": "./second_carteen/annnotation/test.idl",
         "bootstrap_idl": "./second_carteen/pre_data/image_list.txt",
         "idl_mean": "./data/brainwash_mean.npy"
     },
@@ -11,7 +12,7 @@
         "test_interval": 5,
         "bootstrap_interval": 5,
         "momentum": 0.5,
-        "random_seed": 2,
+        "random_seed": 1,
         "clip_gradients": 0.1,
         "gamma": 0.8,
         "stepsize": 100000,
@@ -39,6 +40,7 @@
         "grid_width": 20,
         "img_height": 480,
         "img_width": 640,
-        "region_size": 64
+        "region_size": 64,
+        "ignore_label": -1
     }
 }

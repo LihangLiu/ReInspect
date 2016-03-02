@@ -1,7 +1,7 @@
 {
     "data": {
-        "test_idl": "/home/pig/apollocaffe/data/end_to_end_people_detection/label_list_640_480.test.idl",
-        "train_idl": "/home/pig/apollocaffe/data/end_to_end_people_detection/label_list_640_480.train.idl",
+        "test_idl": "./second_carteen/annnotation/test.idl",
+        "train_idl": "./second_carteen/annnotation/train.idl",
         "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
@@ -18,11 +18,11 @@
     },
     "logging": {
         "display_interval": 100,
-        "snapshot_prefix": "/home/pig/ReInspect/tmp/reinspect",
+        "snapshot_prefix": "./second_carteen/tmp/reinspect",
         "snapshot_interval": 10000,
-        "schematic_path": "/home/pig/ReInspect/tmp/reinspect.png",
-        "graph_prefix": "/home/pig/ReInspect/tmp/history",
-        "log_file": "/home/pig/ReInspect/tmp/log_brainwash.txt",
+        "schematic_path": "./second_carteen/tmp/reinspect.png",
+        "graph_prefix": "./second_carteen/tmp/history",
+        "log_file": "./second_carteen/tmp/log_brainwash.txt",
         "graph_interval": 500
     },
     "net": {

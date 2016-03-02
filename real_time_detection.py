@@ -113,7 +113,7 @@ net.load("./tmp/bootstrap_10.h5")
 
 # init output video
 fourcc = cv2.cv.CV_FOURCC(*'XVID')
-output_video = cv2.VideoWriter('output.avi',fourcc, 20.0, (config["net"]["img_width"],config["net"]["img_height"]))
+output_video = cv2.VideoWriter(video_file+'.detected.avi',fourcc, 20.0, (config["net"]["img_width"],config["net"]["img_height"]))
 
 
 
