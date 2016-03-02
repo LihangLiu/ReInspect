@@ -6,11 +6,11 @@
         "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
-        "base_lr": 0.2,
+        "base_lr": 0.01,
         "max_iter": 10000,
         "test_iter": 100,
-        "test_interval": 5,
-        "bootstrap_interval": 5,
+        "test_interval": 100,
+        "bootstrap_interval": 100,
         "momentum": 0.5,
         "random_seed": 1,
         "clip_gradients": 0.1,
@@ -19,7 +19,7 @@
         "weights": ""
     },
     "logging": {
-        "display_interval": 5,
+        "display_interval": 100,
         "snapshot_prefix": "./tmp/bootstrap",
         "snapshot_interval": 10,
         "schematic_path": "./tmp/bootstrap.png",
