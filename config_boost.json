@@ -20,11 +20,11 @@
     },
     "logging": {
         "display_interval": 100,
-        "snapshot_prefix": "./tmp/bootstrap",
+        "snapshot_prefix": "./tmp/boost",
         "snapshot_interval": 100,
-        "schematic_path": "./tmp/bootstrap.png",
+        "schematic_path": "./tmp/boost.png",
         "graph_prefix": "./tmp/history",
-        "log_file": "./tmp/log_bootstrap.txt",
+        "log_file": "./tmp/log_boost.txt",
         "graph_interval": 500
     },
     "net": {

@@ -419,8 +419,11 @@ def train(config):
                 ca_list.append(count_anno)
                 cp_list.append(count_pred)
             loss_hist["test"].append(np.mean(test_loss))
-            print 'iterate:',i, ' precision:', np.sum(cc_list)/np.sum(ca_list)
-            print 'iterate:',i, ' error:', np.sum(ce_list)/np.sum(cp_list)
+            precision = np.sum(cc_list)/np.sum(cp_list)
+            recall = np.sum(cc_list)/np.sum(ca_list)
+            print 'iterate:',i, ' precision:', precision
+            print 'iterate:',i, ' recall:', recall
+            print 'iterate:',i, ' F1 score:', 2*precision*recall/(precision+recall)
         # deploy for subsequent training
         if i % solver["boost_interval"] == 0:
             boot_deploy_list = []
@@ -436,16 +439,16 @@ def train(config):
         learning_rate = (solver["base_lr"] *
                          (solver["gamma"])**(i // solver["stepsize"]))
 
-        re_net.phase = "train"
-        re_net.copy_params_from(boost_net)
-        for _ in range(1):
-            forward(re_net, re_train_gen.next(), net_config)
-            if not math.isnan(re_net.loss):  
-                re_net.backward()
-            re_net.update(lr=learning_rate, momentum=solver["momentum"],
-                       clip_gradients=solver["clip_gradients"])
+        # re_net.phase = "train"
+        # re_net.copy_params_from(boost_net)
+        # for _ in range(1):
+        #     forward(re_net, re_train_gen.next(), net_config)
+        #     if not math.isnan(re_net.loss):  
+        #         re_net.backward()
+        #     re_net.update(lr=learning_rate, momentum=solver["momentum"],
+        #                clip_gradients=solver["clip_gradients"])
 
-        boost_net.copy_params_from(re_net)
+        # boost_net.copy_params_from(re_net)
         boost_net.phase = 'train'
         forward(boost_net, boot_train_gen.next(), net_config)
         loss_hist["train"].append(boost_net.loss)

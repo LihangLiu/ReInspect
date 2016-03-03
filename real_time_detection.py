@@ -109,7 +109,7 @@ net = apollocaffe.ApolloNet()
 net.phase = 'test'
 forward(net, input_gen.next(), config["net"], True)
 # net.load("./data/brainwash_800000.h5")
-net.load("./tmp/bootstrap_10.h5")
+net.load("./tmp/bootstrap_200.h5")
 
 # init output video
 fourcc = cv2.cv.CV_FOURCC(*'XVID')
