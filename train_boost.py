@@ -369,24 +369,24 @@ def train(config):
     # # # load image data # # # 
     re_train_gen = load_idl(data_config["reinspect_train_idl"],
                                    image_mean, net_config, jitter=False)
-    boot_test_gen = load_idl(data_config["bootstrap_test_idl"],
+    boost_test_gen = load_idl(data_config["boost_test_idl"],
                                    image_mean, net_config, jitter=False)
-    boot_imname_list = load_imname_list(data_config['bootstrap_idl'])
+    boost_imname_list = load_imname_list(data_config['boost_idl'])
 
 
     # # # init apollocaffe # # # 
-    # bootstrap net
-    boot_net = apollocaffe.ApolloNet()
+    # boost net
+    boost_net = apollocaffe.ApolloNet()
     net_config["ignore_label"] = 0
-    forward(boot_net, boot_test_gen.next(), net_config)
+    forward(boost_net, boost_test_gen.next(), net_config)
     if solver["weights"]:
-        boot_net.load(solver["weights"])
+        boost_net.load(solver["weights"])
     else:
-        boot_net.load(googlenet.weights_file())
+        boost_net.load(googlenet.weights_file())
     # reinspect net
     re_net = apollocaffe.ApolloNet()
     net_config["ignore_label"] = 1
-    forward(re_net, boot_test_gen.next(), net_config) 
+    forward(re_net, boost_test_gen.next(), net_config) 
 
     # # # init log # # # 
     loss_hist = {"train": [], "test": []}
@@ -399,21 +399,21 @@ def train(config):
                                            logging["snapshot_prefix"]),
         ]
 
-    # # #  bootstrap # # # 
+    # # #  boost # # # 
     for i in range(solver["start_iter"], solver["max_iter"]):
-        # test
+        # test for evaluation
         if i % solver["test_interval"] == 0:
-            boot_net.phase = 'test'
+            boost_net.phase = 'test'
             test_loss = []
             cc_list = []
             ce_list = []
             ca_list = []
             cp_list = []
             for _ in range(solver["test_iter"]):
-                input_en = boot_test_gen.next()
-                forward(boot_net, input_en, net_config, False)
-                test_loss.append(boot_net.loss)
-                (count_cover,count_error,count_anno, count_pred) = get_accuracy(boot_net, input_en, net_config)
+                input_en = boost_test_gen.next()
+                forward(boost_net, input_en, net_config, False)
+                test_loss.append(boost_net.loss)
+                (count_cover,count_error,count_anno, count_pred) = get_accuracy(boost_net, input_en, net_config)
                 cc_list.append(count_cover)
                 ce_list.append(count_error)
                 ca_list.append(count_anno)
@@ -421,40 +421,42 @@ def train(config):
             loss_hist["test"].append(np.mean(test_loss))
             print 'iterate:',i, ' precision:', np.sum(cc_list)/np.sum(ca_list)
             print 'iterate:',i, ' error:', np.sum(ce_list)/np.sum(cp_list)
-        # deploy
-        if i % solver["bootstrap_interval"] == 0:
+        # deploy for subsequent training
+        if i % solver["boost_interval"] == 0:
             boot_deploy_list = []
-            random.shuffle(boot_imname_list)                                    
-            for imname in boot_imname_list[:solver["bootstrap_interval"]]:                      # not all images are needed for bootstrap training
+            random.shuffle(boost_imname_list)                                    
+            for imname in boost_imname_list[:solver["boost_interval"]]:                      # not all images are needed for boost training
                 inputs = generate_deploy_inputs(imname, image_mean, net_config)
-                (bbox, conf) = forward(boot_net, inputs, net_config, deploy=True)
+                (bbox, conf) = forward(boost_net, inputs, net_config, deploy=True)
                 boot_deploy_list.append({'imname':imname, 'bbox':bbox, 'conf':conf})
             thres = 0.9
             boot_train_gen = convert_deploy_2_train(boot_deploy_list, image_mean, net_config, threshold=thres)
+
         # train
         learning_rate = (solver["base_lr"] *
                          (solver["gamma"])**(i // solver["stepsize"]))
 
         re_net.phase = "train"
-        re_net.copy_params_from(boot_net)
+        re_net.copy_params_from(boost_net)
         for _ in range(1):
             forward(re_net, re_train_gen.next(), net_config)
-            re_net.backward()
+            if not math.isnan(re_net.loss):  
+                re_net.backward()
             re_net.update(lr=learning_rate, momentum=solver["momentum"],
                        clip_gradients=solver["clip_gradients"])
 
-        boot_net.copy_params_from(re_net)
-        boot_net.phase = 'train'
-        forward(boot_net, boot_train_gen.next(), net_config)
-        loss_hist["train"].append(boot_net.loss)
-        if not math.isnan(boot_net.loss):
-            boot_net.backward()
-        boot_net.update(lr=learning_rate, momentum=solver["momentum"],
+        boost_net.copy_params_from(re_net)
+        boost_net.phase = 'train'
+        forward(boost_net, boot_train_gen.next(), net_config)
+        loss_hist["train"].append(boost_net.loss)
+        if not math.isnan(boost_net.loss):      # loss may be "nan", caused by ignore label. 
+            boost_net.backward()
+        boost_net.update(lr=learning_rate, momentum=solver["momentum"],
                    clip_gradients=solver["clip_gradients"])
         for logger in loggers:
             logger.log(i, {'train_loss': loss_hist["train"],
                            'test_loss': loss_hist["test"],
-                           'apollo_net': boot_net, 'start_iter': 0})
+                           'apollo_net': boost_net, 'start_iter': 0})
 
 
 def main():
