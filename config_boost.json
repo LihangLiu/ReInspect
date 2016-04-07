@@ -1,9 +1,12 @@
 {
     "data": {
         "reinspect_train_idl": "./data/brainwash/brainwash_train.idl",
+        "reinspect_test_idl": "./data/brainwash/brainwash_test.idl",
         "boost_test_idl": "./second_carteen/annnotation/test.idl",
+        "boost_bg_idl": "./second_carteen/pre_data/bg_image_list.idl",
         "boost_idl": "./second_carteen/pre_data/image_list.txt",
-        "idl_mean": "./data/brainwash_mean.npy"
+        "idl_mean": "./data/brainwash_mean.npy",
+        "lstm_input_mean": "./data/lstm_input_mean.txt"
     },
     "solver": {
         "base_lr": 0.01,
@@ -19,9 +22,9 @@
         "weights": ""
     },
     "logging": {
-        "display_interval": 100,
+        "display_interval": 50,
         "snapshot_prefix": "./tmp/boost",
-        "snapshot_interval": 100,
+        "snapshot_interval": 1000,
         "schematic_path": "./tmp/boost.png",
         "graph_prefix": "./tmp/history",
         "log_file": "./tmp/log_boost.txt",

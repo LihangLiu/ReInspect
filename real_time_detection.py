@@ -34,7 +34,7 @@ def load_video_file(video_file, net_config, data_mean):
 	        #cv2.imshow('video', frame)
 	        pos_frame = cap.get(cv2.cv.CV_CAP_PROP_POS_FRAMES)
 	        raw_img = frame[:net_config['img_height'], :net_config['img_width'], :]
-	        raw_img[:180, : ,:] = 0
+	        # raw_img[:180, : ,:] = 0
 	        yield prepocessd_image(raw_img, data_mean)
 
 	    else:
@@ -99,7 +99,7 @@ data_mean = load_data_mean(config["data"]["idl_mean"],
                            config["net"]["img_width"], 
                            config["net"]["img_height"], image_scaling=1.0)
 
-video_file = r'./second_carteen/pre_data/2015_1230_115055_027.MOV'
+video_file = r'./second_carteen/pre_data/test.mov'
 input_gen = load_video_file(video_file, config["net"], data_mean)
 
 # init apollocaffe
@@ -109,7 +109,7 @@ net = apollocaffe.ApolloNet()
 net.phase = 'test'
 forward(net, input_gen.next(), config["net"], True)
 # net.load("./data/brainwash_800000.h5")
-net.load("./tmp/bootstrap_200.h5")
+net.load("./data/brainwash_800000.h5")
 
 # init output video
 fourcc = cv2.cv.CV_FOURCC(*'XVID')

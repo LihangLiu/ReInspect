@@ -20,6 +20,7 @@ from utils import (annotation_jitter, image_to_h5,
                    annotation_to_h5, load_data_mean, Rect, stitch_rects)
 from utils.annolist import AnnotationLib as al
 from utils.annolist.AnnotationLib import Annotation, AnnoRect
+from utils.pyloss import MMDLossLayer
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -106,6 +107,14 @@ def load_idl(idlfile, data_mean, net_config, jitter=True):
             yield {"imname": anno.imageName, "raw": jit_image, "image": image,
                    "boxes": boxes, "box_flags": box_flags, 'anno': jit_anno}
 
+
+def load_lstm_input_mean(lim_file):
+    lines = open(lim_file, 'r').readlines()
+    while True:
+        random.shuffle(lines)
+        for line in lines:
+            lstm_input_mean = np.array([float(x) for x in line.split()])
+            yield lstm_input_mean
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -277,7 +286,7 @@ def generate_inner_products(net, step, filler):
                        output_4d=True,
                        weight_filler=filler))
     net.f(InnerProduct("ip_bbox_unscaled%d" % step, 4,
-                       bottoms=["dropout%d" % step], output_4d=True,
+                       bottoms=["dropout%d" % step], output_4d=True, 
                        weight_filler=filler))
     net.f(Power("ip_bbox%d" % step, scale=100,
                 bottoms=["ip_bbox_unscaled%d" % step]))
@@ -305,7 +314,7 @@ def generate_losses(net, net_config):
                           bottoms=["score_concat", "box_confidences"],
                           ignore_label=net_config["ignore_label"]))
 
-def forward(net, input_data, net_config, deploy=False):
+def forward(net, input_data, net_config, deploy=False, lstm_input_mean=[]):
     """Defines and creates the ReInspect network given the net, input data
     and configurations."""
 
@@ -340,6 +349,21 @@ def forward(net, input_data, net_config, deploy=False):
     net.f(Concat("score_concat", bottoms=concat_bottoms["score"], concat_dim=2))
     net.f(Concat("bbox_concat", bottoms=concat_bottoms["bbox"], concat_dim=2))
 
+    if len(lstm_input_mean) != 0:
+        net.f(NumpyData("lstm_input_mean", data=lstm_input_mean))
+        net.f("""
+              type: 'Python'
+              name: 'loss'
+              top: 'loss'
+              bottom: 'lstm_input'
+              bottom: 'lstm_input_mean'
+              loss_weight: 0.5
+              python_param {
+                module: 'train_boost'
+                layer: 'MMDLossLayer'
+              }
+              """ )
+
     if not deploy:
         generate_losses(net, net_config)
 
@@ -367,8 +391,13 @@ def train(config):
         net_config["img_height"], image_scaling=1.0)
 
     # # # load image data # # # 
+    lstm_input_mean_gen = load_lstm_input_mean(data_config['lstm_input_mean'])
     re_train_gen = load_idl(data_config["reinspect_train_idl"],
+                                   image_mean, net_config)
+    re_test_gen = load_idl(data_config["reinspect_test_idl"],
                                    image_mean, net_config, jitter=False)
+    boost_bg_gen = load_idl(data_config["boost_bg_idl"],
+                                   image_mean, net_config)
     boost_test_gen = load_idl(data_config["boost_test_idl"],
                                    image_mean, net_config, jitter=False)
     boost_imname_list = load_imname_list(data_config['boost_idl'])
@@ -378,7 +407,8 @@ def train(config):
     # boost net
     boost_net = apollocaffe.ApolloNet()
     net_config["ignore_label"] = 0
-    forward(boost_net, boost_test_gen.next(), net_config)
+    forward(boost_net, boost_test_gen.next(), net_config, 
+                            lstm_input_mean=lstm_input_mean_gen.next())
     if solver["weights"]:
         boost_net.load(solver["weights"])
     else:
@@ -386,7 +416,8 @@ def train(config):
     # reinspect net
     re_net = apollocaffe.ApolloNet()
     net_config["ignore_label"] = 1
-    forward(re_net, boost_test_gen.next(), net_config) 
+    forward(re_net, boost_test_gen.next(), net_config,  
+                            lstm_input_mean=lstm_input_mean_gen.next())
 
     # # # init log # # # 
     loss_hist = {"train": [], "test": []}
@@ -405,6 +436,7 @@ def train(config):
         if i % solver["test_interval"] == 0:
             boost_net.phase = 'test'
             test_loss = []
+            test_loss2 = []
             cc_list = []
             ce_list = []
             ca_list = []
@@ -413,6 +445,7 @@ def train(config):
                 input_en = boost_test_gen.next()
                 forward(boost_net, input_en, net_config, False)
                 test_loss.append(boost_net.loss)
+                test_loss2.append(boost_net.blobs['loss'].data[0])
                 (count_cover,count_error,count_anno, count_pred) = get_accuracy(boost_net, input_en, net_config)
                 cc_list.append(count_cover)
                 ce_list.append(count_error)
@@ -421,9 +454,22 @@ def train(config):
             loss_hist["test"].append(np.mean(test_loss))
             precision = np.sum(cc_list)/np.sum(cp_list)
             recall = np.sum(cc_list)/np.sum(ca_list)
-            print 'iterate:',i, ' precision:', precision
-            print 'iterate:',i, ' recall:', recall
-            print 'iterate:',i, ' F1 score:', 2*precision*recall/(precision+recall)
+            print 'hungarian loss:', np.mean(test_loss), np.mean(test_loss2)
+            print 'iterate:  %6.d error, recall, F1: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
+            # cc_list = []
+            # ce_list = []
+            # ca_list = []
+            # cp_list = []
+            # for _ in range(solver["test_iter"]):
+            #     input_en = re_test_gen.next()
+            #     (count_cover,count_error,count_anno, count_pred) = get_accuracy(boost_net, input_en, net_config)
+            #     cc_list.append(count_cover)
+            #     ce_list.append(count_error)
+            #     ca_list.append(count_anno)
+            #     cp_list.append(count_pred)
+            # precision = np.sum(cc_list)/np.sum(cp_list)
+            # recall = np.sum(cc_list)/np.sum(ca_list)
+            # print 'iterate:  %6.d error, recall, F1 on old: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
         # deploy for subsequent training
         if i % solver["boost_interval"] == 0:
             boot_deploy_list = []
@@ -438,19 +484,30 @@ def train(config):
         # train
         learning_rate = (solver["base_lr"] *
                          (solver["gamma"])**(i // solver["stepsize"]))
-
-        # re_net.phase = "train"
-        # re_net.copy_params_from(boost_net)
-        # for _ in range(1):
-        #     forward(re_net, re_train_gen.next(), net_config)
+        # train on reinspect dataset
+        re_net.phase = "train"
+        re_net.copy_params_from(boost_net)
+        for _ in range(10):
+            forward(re_net, re_train_gen.next(), net_config, 
+                            lstm_input_mean=lstm_input_mean_gen.next())
+            if not math.isnan(re_net.loss):  
+                re_net.backward()
+            re_net.update(lr=learning_rate, momentum=solver["momentum"],
+                       clip_gradients=solver["clip_gradients"])
+        # # train on boost background dataset -> useless 
+        # if i % solver['boost_interval'] == 0:
+        #     forward(re_net, boost_bg_gen.next(), net_config, lstm_input_mean=lstm_input_mean)
         #     if not math.isnan(re_net.loss):  
         #         re_net.backward()
         #     re_net.update(lr=learning_rate, momentum=solver["momentum"],
         #                clip_gradients=solver["clip_gradients"])
 
-        # boost_net.copy_params_from(re_net)
+        boost_net.copy_params_from(re_net)
+
+        # train on boost dataset
         boost_net.phase = 'train'
-        forward(boost_net, boot_train_gen.next(), net_config)
+        forward(boost_net, boot_train_gen.next(), net_config,  
+                            lstm_input_mean=lstm_input_mean_gen.next())
         loss_hist["train"].append(boost_net.loss)
         if not math.isnan(boost_net.loss):      # loss may be "nan", caused by ignore label. 
             boost_net.backward()
@@ -475,6 +532,9 @@ def main():
     apollocaffe.set_random_seed(config["solver"]["random_seed"])
     apollocaffe.set_device(args.gpu)
     apollocaffe.set_cpp_loglevel(args.loglevel)
+
+    print json.dumps(config['net'], indent=4, sort_keys=True)
+    print json.dumps(config['solver'], indent=4, sort_keys=True)
 
     train(config)
 
