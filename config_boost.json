@@ -4,8 +4,7 @@
         "reinspect_test_idl": "./data/brainwash/brainwash_test.idl",
         "boost_test_idl": "./multi_scene_data/annnotation/test.idl",
         "boost_idl": "./multi_scene_data/pre_data/images_640_480/second_carteen_01/second_carteen_01.mov.txt",
-        "idl_mean": "./data/brainwash_mean.npy",
-        "lstm_input_mean": "./data/lstm_input_mean.txt"
+        "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
         "base_lr": 0.01,
@@ -44,5 +43,10 @@
         "img_width": 640,
         "region_size": 64,
         "ignore_label": -1
+    },
+    "MMD": {
+        "MMD_layers": ["lstm_input", "lstm_hidden0", 
+                "lstm_hidden1", "lstm_hidden2","lstm_hidden3", "lstm_hidden4"],
+        "MMD_loss_weights": [1,0.1,0.1,0.1,0.1,0.1]
     }
 }
