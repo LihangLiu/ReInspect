@@ -357,7 +357,7 @@ def forward(net, input_data, net_config, deploy=False, lstm_input_mean=[]):
               top: 'loss'
               bottom: 'lstm_input'
               bottom: 'lstm_input_mean'
-              loss_weight: 0.5
+              loss_weight: 1
               python_param {
                 module: 'train_boost'
                 layer: 'MMDLossLayer'
@@ -396,8 +396,6 @@ def train(config):
                                    image_mean, net_config)
     re_test_gen = load_idl(data_config["reinspect_test_idl"],
                                    image_mean, net_config, jitter=False)
-    boost_bg_gen = load_idl(data_config["boost_bg_idl"],
-                                   image_mean, net_config)
     boost_test_gen = load_idl(data_config["boost_test_idl"],
                                    image_mean, net_config, jitter=False)
     boost_imname_list = load_imname_list(data_config['boost_idl'])
@@ -490,6 +488,7 @@ def train(config):
         for _ in range(10):
             forward(re_net, re_train_gen.next(), net_config, 
                             lstm_input_mean=lstm_input_mean_gen.next())
+            # forward(re_net, re_train_gen.next(), net_config)
             if not math.isnan(re_net.loss):  
                 re_net.backward()
             re_net.update(lr=learning_rate, momentum=solver["momentum"],
