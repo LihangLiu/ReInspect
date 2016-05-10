@@ -8,7 +8,7 @@
     },
     "solver": {
         "base_lr": 0.01,
-        "max_iter": 10000,
+        "max_iter": 6000,
         "test_iter": 100,
         "test_interval": 100,
         "boost_interval": 100,
@@ -45,8 +45,8 @@
         "ignore_label": -1
     },
     "MMD": {
-        "MMD_layers": ["lstm_input", "lstm_hidden0", 
+        "MMD_layers": ["lstm_hidden0", 
                 "lstm_hidden1", "lstm_hidden2","lstm_hidden3", "lstm_hidden4"],
-        "MMD_loss_weights": [1,0.1,0.1,0.1,0.1,0.1]
+        "MMD_loss_weights": [1,1,1,1,1]
     }
 }

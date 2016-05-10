@@ -23,12 +23,12 @@ def overlap_union(x1,y1,x2,y2,x3,y3,x4,y4):
     SU = (x2-x1)*(y2-y1) + (x4-x3)*(y4-y3) - SI + 0.0
     return SI/SU
 
-def get_accuracy(net, inputs, net_config):
+def get_accuracy(net, inputs, net_config, threshold = 0.9):
     bbox_list, conf_list = forward(net, inputs, net_config, True)
     anno = inputs['anno']
-    count = 0.0
+    count_anno = 0.0
     for r in anno:
-        count += 1
+        count_anno += 1
     pix_per_w = net_config["img_width"]/net_config["grid_width"]
     pix_per_h = net_config["img_height"]/net_config["grid_height"]
 
@@ -43,25 +43,34 @@ def get_accuracy(net, inputs, net_config):
             abs_cy = pix_per_h/2 + pix_per_h*y+int(bbox[1,0,0])
             w = bbox[2,0,0]
             h = bbox[3,0,0]
+            if conf < threshold:
+                continue
             all_rects[y][x].append(Rect(abs_cx,abs_cy,w,h,conf))
 
     acc_rects = stitch_rects(all_rects, net_config)
     count_cover = 0.0
+    count_error = 0.0
+    count_pred = 0.0
     for rect in acc_rects:
-        if rect.true_confidence < 0.9:
+        if rect.true_confidence < threshold:
             continue
         else:
+            count_pred += 1
             x1 = rect.cx - rect.width/2.
             x2 = rect.cx + rect.width/2.
             y1 = rect.cy - rect.height/2.
             y2 = rect.cy + rect.height/2.
+            iscover = False
             for r in anno:
-                o_u = overlap_union(x1,y1,x2,y2, r.x1,r.y1,r.x2,r.y2)
-                if o_u >= 0.5:
-                    count_cover += 1
+                if overlap_union(x1,y1,x2,y2, r.x1,r.y1,r.x2,r.y2) >= 0.5:
+                    iscover = True
                     break
+            if iscover:
+                count_cover += 1
+            else:
+                count_error += 1
 
-    return (count_cover,count)
+    return (count_cover, count_error, count_anno, count_pred)
 
 def load_idl(idlfile, data_mean, net_config, jitter=True):
     """Take the idlfile, data mean and net configuration and create a generator
@@ -301,21 +310,31 @@ def train(config):
                                            logging["snapshot_prefix"]),
         ]
     for i in range(solver["start_iter"], solver["max_iter"]):
+        # # test and evaluation
         if i % solver["test_interval"] == 0:
             net.phase = 'test'
             test_loss = []
+            test_loss2 = []
             cc_list = []
-            c_list = []
+            ce_list = []
+            ca_list = []
+            cp_list = []
             for _ in range(solver["test_iter"]):
                 input_en = input_gen_test.next()
-                forward(net, input_en, config["net"], False)
+                forward(net, input_en, net_config, False)
                 test_loss.append(net.loss)
-                (count_cover,count) = get_accuracy(net, input_en, config['net'])
+                (count_cover,count_error,count_anno, count_pred) = get_accuracy(net, input_en, net_config)
                 cc_list.append(count_cover)
-                c_list.append(count)
-            print np.sum(cc_list)/np.sum(c_list)
+                ce_list.append(count_error)
+                ca_list.append(count_anno)
+                cp_list.append(count_pred)
             loss_hist["test"].append(np.mean(test_loss))
+            precision = np.sum(cc_list)/np.sum(cp_list)
+            recall = np.sum(cc_list)/np.sum(ca_list)
+            print 'hungarian loss:', np.mean(test_loss)
+            print 'iterate:  %6.d error, recall, F1: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
             net.phase = 'train'
+
         forward(net, input_gen.next(), config["net"])
         loss_hist["train"].append(net.loss)
         net.backward()

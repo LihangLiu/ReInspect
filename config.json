@@ -1,28 +1,28 @@
 {
     "data": {
-        "test_idl": "./second_carteen/annnotation/test.idl",
-        "train_idl": "./second_carteen/annnotation/train.idl",
+        "test_idl": "./multi_scene_data/annnotation/test.idl",
+        "train_idl": "./multi_scene_data/annnotation/train.idl",
         "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
-        "base_lr": 0.2,
-        "max_iter": 10001,
-        "test_iter": 30,
+        "base_lr": 0.1,
+        "max_iter": 50001,
+        "test_iter": 100,
         "test_interval": 500,
         "momentum": 0.5,
         "random_seed": 2,
         "clip_gradients": 0.1,
         "gamma": 0.8,
-        "stepsize": 100000,
+        "stepsize": 10000,
         "weights": ""
     },
     "logging": {
         "display_interval": 100,
-        "snapshot_prefix": "./second_carteen/tmp/reinspect",
+        "snapshot_prefix": "./tmp/reinspect",
         "snapshot_interval": 10000,
-        "schematic_path": "./second_carteen/tmp/reinspect.png",
-        "graph_prefix": "./second_carteen/tmp/history",
-        "log_file": "./second_carteen/tmp/log_brainwash.txt",
+        "schematic_path": "./tmp/reinspect.png",
+        "graph_prefix": "./tmp/history",
+        "log_file": "./tmp/log_brainwash.txt",
         "graph_interval": 500
     },
     "net": {

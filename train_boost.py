@@ -20,7 +20,7 @@ from utils import (annotation_jitter, image_to_h5,
                    annotation_to_h5, load_data_mean, Rect, stitch_rects)
 from utils.annolist import AnnotationLib as al
 from utils.annolist.AnnotationLib import Annotation, AnnoRect
-from utils.pyloss import MMDLossLayer
+from utils.pyloss import MMDLossLayer, MMDParamLossLayer
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -355,14 +355,17 @@ def forward(net, input_data, net_config, deploy=False):
 
 def add_MMD_loss_layer(target_net, src_net, MMD_config):
     MMD_layer_names = MMD_config['MMD_layers']
+    # mmd loss
     for i in range(len(MMD_layer_names)):
         bottom0 = MMD_layer_names[i]
         layer_loss_weight = MMD_config['MMD_loss_weights'][i]
-        src_data = src_net.blobs[bottom0].data
-        assert len(src_data.shape)==2, "only support layers with 2 dimensions, %d given"%(len(src_data.shape))
-        top = bottom0+"_loss"
         bottom1 = "src_"+bottom0
-        target_net.f(NumpyData(bottom1, data=src_data))
+        target_net.f(NumpyData(bottom1, data=src_net.blobs[bottom0].data))
+        bottom2 = "ip_soft_conf%d" % i
+        bottom3 = "src_" + bottom2
+        target_net.f(NumpyData(bottom3, data=src_net.blobs[bottom2].data))
+        # mean
+        top = bottom0+"_loss"
         target_net.f(str("""
               type: 'Python'
               name: '%s'
@@ -375,6 +378,83 @@ def add_MMD_loss_layer(target_net, src_net, MMD_config):
                 layer: 'MMDLossLayer'
               }
               """ % (top, top, bottom0, bottom1, layer_loss_weight)))
+
+        # class 0 mean
+        # top = bottom0+"_class_0_loss"
+        # target_net.f(str("""
+        #       type: 'Python'
+        #       name: '%s'
+        #       top: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       loss_weight: %s
+        #       python_param {
+        #         module: 'train_boost'
+        #         layer: 'MMDClass0LossLayer'
+        #       }
+        #       """ % (top, top, bottom0, bottom1, bottom2, bottom3, layer_loss_weight)))
+
+        # class 1 mean
+        # top = bottom0+"_class_1_loss"
+        # target_net.f(str("""
+        #       type: 'Python'
+        #       name: '%s'
+        #       top: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       loss_weight: %s
+        #       python_param {
+        #         module: 'train_boost'
+        #         layer: 'MMDClass1LossLayer'
+        #       }
+        #       """ % (top, top, bottom0, bottom1, bottom2, bottom3, layer_loss_weight)))
+
+        # var
+        # top = bottom0+"_var_loss"
+        # target_net.f(str("""
+        #       type: 'Python'
+        #       name: '%s'
+        #       top: '%s'
+        #       bottom: '%s'
+        #       bottom: '%s'
+        #       loss_weight: %s
+        #       python_param {
+        #         module: 'train_boost'
+        #         layer: 'MMDVarLossLayer'
+        #       }
+        #       """ % (top, top, bottom0, bottom1, layer_loss_weight)))
+
+        # lstm_hidden*param_ip_bbox: (300,250) * (4, 250)
+        for j,x in enumerate(['x','y','h','w']):
+            param_name = 'ip_bbox_unscaled%d.p0'%i
+            bottom2 = param_name+'.'+x
+            target_net.f(NumpyData(bottom2, data=target_net.params[param_name].data[j,:]))
+            bottom3 = "src_" + bottom2
+            target_net.f(NumpyData(bottom3, data=src_net.params[param_name].data[j,:]))
+            top = bottom0+"_"+bottom2+"_loss"
+            target_net.f(str("""
+                  type: 'Python'
+                  name: '%s'
+                  top: '%s'
+                  bottom: '%s'
+                  bottom: '%s'
+                  bottom: '%s'
+                  bottom: '%s'
+                  loss_weight: %s
+                  python_param {
+                    module: 'train_boost'
+                    layer: 'MMDParamLossLayer'
+                  }
+                  """ % (top, top, bottom0, bottom1, bottom2, bottom3, layer_loss_weight)))
+
+
+
+
+
 
 
 def train(config):
@@ -460,7 +540,14 @@ def train(config):
             precision = np.sum(cc_list)/np.sum(cp_list)
             recall = np.sum(cc_list)/np.sum(ca_list)
             print 'hungarian loss:', np.mean(test_loss)
+            print boost_net.blobs['lstm_hidden0_loss'].data,
+            print boost_net.blobs['lstm_hidden0_ip_bbox_unscaled0.p0.x_loss'].data,
+            print boost_net.blobs['lstm_hidden0_ip_bbox_unscaled0.p0.y_loss'].data,
+            print boost_net.blobs['lstm_hidden0_ip_bbox_unscaled0.p0.w_loss'].data,
+            print boost_net.blobs['lstm_hidden0_ip_bbox_unscaled0.p0.h_loss'].data
+            # print boost_net.blobs['lstm_hidden0_class_0_loss'].data
             print 'iterate:  %6.d error, recall, F1: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
+            
 
         # # deploy for subsequent training
         if i % solver["boost_interval"] == 0:
@@ -530,3 +617,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# python train_boost.py --gpu=0 --config=config_boost.json  --weights=./data/brainwash_800000.h5
