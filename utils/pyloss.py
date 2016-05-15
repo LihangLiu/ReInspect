@@ -19,14 +19,26 @@ class MMDLossLayer(caffe.Layer):
         # loss output is scalar
         top[0].reshape(1)
 
+
     def forward(self, bottom, top):
         data_mean0 = np.mean(bottom[0].data, axis=0)
-        data_mean1 = np.mean(bottom[1].data, axis=0)
+        data_mean1 = np.mean(bottom[1].data, axis=0)                        
         self.diff[...] = data_mean0 - data_mean1
+        # print 'bottom', bottom[0].data[0,:5]
+        # print 'bottom', bottom[1].data[0,:5]
+        # print 'mean', data_mean0[:5]
+        # print 'diff', self.diff[:5]
         top[0].data[...] = np.sum(self.diff**2) / self._dimentions / 2.
 
     def backward(self, top, propagate_down, bottom):
-        bottom[0].diff[...] = 50 * self.diff / self._dimentions
+        for i in range(2):
+            if not propagate_down[i]:
+                continue
+            if i == 0:
+                sign = 1
+            else:
+                sign = -1
+            bottom[i].diff[...] = sign * self.diff / self._dimentions
 
 
 class MMDClass0LossLayer(caffe.Layer):

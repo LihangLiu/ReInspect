@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import json
 import math
+import time
 import os
 import random
 import itertools
@@ -14,14 +15,14 @@ import caffe
 import apollocaffe
 from apollocaffe.models import googlenet
 from apollocaffe.layers import (Power, LstmUnit, Convolution, NumpyData,
-                                Transpose, Filler, SoftmaxWithLoss,
+                                Transpose, Filler, SoftmaxWithLoss, Reshape,
                                 Softmax, Concat, Dropout, InnerProduct)
 
 from utils import (annotation_jitter, image_to_h5,
                    annotation_to_h5, load_data_mean, Rect, stitch_rects)
 from utils.annolist import AnnotationLib as al
 from utils.annolist.AnnotationLib import Annotation, AnnoRect
-from utils.pyloss import MMDLossLayer, MMDParamLossLayer
+from utils.pyloss import MMDLossLayer
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
@@ -109,7 +110,6 @@ def load_idl(idlfile, data_mean, net_config, jitter=True, if_random=True):
             yield {"imname": anno.imageName, "raw": jit_image, "image": image,
                    "boxes": boxes, "box_flags": box_flags, 'anno': jit_anno}
 
-
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 def load_imname_list(imfile):
@@ -124,7 +124,8 @@ def generate_input_en(imname, data_mean, net_config):
     image = image_to_h5(raw_image, data_mean, image_scaling=1.0)
     return {"imname": imname, "raw": raw_image, "image": image}
 
-def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, threshold=0.9, jitter=True):
+def convert_deploy_2_train(boot_deploy_list, data_mean, net_config,
+                               threshold=0.9, jitter=True, if_random=True):
     annos = []
     pix_per_w = net_config["img_width"]/net_config["grid_width"]
     pix_per_h = net_config["img_height"]/net_config["grid_height"]
@@ -161,7 +162,8 @@ def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, threshold=0.
         annos.append(anno)
 
     while True:
-        random.shuffle(annos)
+        if if_random:
+            random.shuffle(annos)
         for anno in annos:
             if jitter:
                 jit_image, jit_anno = annotation_jitter(
@@ -176,6 +178,63 @@ def convert_deploy_2_train(boot_deploy_list, data_mean, net_config, threshold=0.
                 net_config["region_size"], net_config["max_len"])
             yield {"imname": anno.imageName, "raw": jit_image, "image": image,
                    "boxes": boxes, "box_flags": box_flags, 'anno': jit_anno}
+
+
+# # # # # # # # # # # # new layers for ip split # # # # # # # # # # # # # # 
+
+def DotMultiply(name, bottoms=[], tops=[]):
+    tops_ = []
+    if len(tops)==0:
+        tops_.append(name)
+    else:
+        tops_ = tops
+    s = """
+      type: "DotMultiply"
+      name: "%s"
+      bottom: "%s"
+      top: "%s"
+      dot_multiply_param {
+        weight_filler {
+          type: "uniform" 
+          value: 0.1
+        }
+      }""" % (name, bottoms[0], tops_[0])
+    return s 
+
+def Sum(name, bottoms=[], tops=[]):
+    tops_ = []
+    if len(tops)==0:
+        tops_.append(name)
+    else:
+        tops_ = tops
+    s = """
+      type: "Sum"
+      name: "%s"
+      bottom: "%s"
+      top: "%s"
+      sum_param {
+        bias_filler {
+          type: "constant" 
+          value: 0
+        }
+      }""" % (name, bottoms[0], tops_[0])
+    return s
+
+def MMDLoss(name, bottoms=[], tops=[], loss_weight=1.0):
+    tops_ = []
+    if len(tops)==0:
+        tops_.append(name)
+    else:
+        tops_ = tops
+    s = str("""
+          type: 'MMDLoss'
+          name: '%s'
+          top: '%s'
+          bottom: '%s'
+          bottom: '%s'
+          loss_weight: %s
+          """ % (name, tops_[0], bottoms[0], bottoms[1], loss_weight))
+    return s
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -271,6 +330,39 @@ def generate_lstm(net, step, lstm_params, lstm_out, dropout_ratio):
     net.f(Dropout("dropout%d" % step, dropout_ratio,
                   bottoms=["lstm_hidden%d" % step]))
 
+def generate_ip_split_layers(net, bottom_name, bottom_c_i, top_name, top_c_o):
+    """ 
+        bottom (n, c_i) 
+        -> bottom.ip_multiply_i.top (n,c_i) 
+        -> bottom.ip_sum_i.top (n, 1,1,1) 
+        -> top (n, c_o,1,1)
+    """
+    ip_sum_concat = []
+    for c in range(top_c_o):
+        ip_mul_name = "%s.ip_multiply_%d.%s" % (bottom_name, c, top_name)
+        # print ip_mul_name
+        net.f(DotMultiply(name=ip_mul_name, bottoms=[bottom_name]))
+        ip_sum_name = "%s.ip_sum_%d.%s" % (bottom_name, c, top_name)
+        ip_sum_concat.append(ip_sum_name)
+        net.f(Sum(name=ip_sum_name, bottoms=[ip_mul_name]))
+    net.f(Concat(top_name, bottoms=ip_sum_concat, concat_dim=1))
+
+def copy_param_of_ip_split(src_net, tar_net, bottom_name, bottom_c_i, top_name, top_c_o):
+    """
+        src_top.p0 (top_c_o, bottom_c_i)
+        -> \sum{top_c_o}{bottom.ip_multiply_i.top.p0 (bottom_c_i, 1, 1, 1)}
+        src_top.p1 (top_c_o)
+        -> \sum{top_c_o} bottom.ip_sum_i.top.p0 (1)
+    """
+    src_bottom_p0 = src_net.params[top_name+'.p0'].data
+    src_bottom_p1 = src_net.params[top_name+'.p1'].data
+    for c_o in range(top_c_o):
+        ip_mul_name = "%s.ip_multiply_%d.%s" % (bottom_name, c_o, top_name)
+        ip_sum_name = "%s.ip_sum_%d.%s" % (bottom_name, c_o, top_name)
+        tar_net.params[ip_mul_name+'.p0'].data[:] = src_bottom_p0[c_o, :]
+        tar_net.params[ip_sum_name+'.p0'].data[0] = src_bottom_p1[c_o]
+
+
 def generate_inner_products(net, step, filler):
     """Inner products are fully connected layers. They generate
     the final regressions for the confidence (ip_soft_conf),
@@ -282,6 +374,16 @@ def generate_inner_products(net, step, filler):
     net.f(InnerProduct("ip_bbox_unscaled%d" % step, 4,
                        bottoms=["dropout%d" % step], output_4d=True, 
                        weight_filler=filler))
+    net.f(Power("ip_bbox%d" % step, scale=100,
+                bottoms=["ip_bbox_unscaled%d" % step]))
+    net.f(Softmax("ip_soft_conf%d" % step, bottoms=["ip_conf%d"%step]))
+
+def generate_inner_products_using_ip_split(net, step, filler):
+    bottom_name = "dropout%d" % step
+    generate_ip_split_layers(net, bottom_name, 250, 
+                                  "ip_conf%d"%step, 2)
+    generate_ip_split_layers(net, bottom_name, 250, 
+                                  "ip_bbox_unscaled%d"%step, 4)
     net.f(Power("ip_bbox%d" % step, scale=100,
                 bottoms=["ip_bbox_unscaled%d" % step]))
     net.f(Softmax("ip_soft_conf%d" % step, bottoms=["ip_conf%d"%step]))
@@ -308,7 +410,7 @@ def generate_losses(net, net_config):
                           bottoms=["score_concat", "box_confidences"],
                           ignore_label=net_config["ignore_label"]))
 
-def forward(net, input_data, net_config, deploy=False):
+def forward(net, input_data, net_config, deploy=False, enable_ip_split=True):
     """Defines and creates the ReInspect network given the net, input data
     and configurations."""
 
@@ -335,13 +437,17 @@ def forward(net, input_data, net_config, deploy=False):
         lstm_out = get_lstm_params(step)
         generate_lstm(net, step, lstm_params,
                       lstm_out, net_config["dropout_ratio"])
-        generate_inner_products(net, step, filler)
+        if enable_ip_split:
+            generate_inner_products_using_ip_split(net, step, filler)
+        else:
+            generate_inner_products(net, step, filler)
 
         concat_bottoms["score"].append("ip_conf%d" % step)
         concat_bottoms["bbox"].append("ip_bbox%d" % step)
 
     net.f(Concat("score_concat", bottoms=concat_bottoms["score"], concat_dim=2))
     net.f(Concat("bbox_concat", bottoms=concat_bottoms["bbox"], concat_dim=2))
+
 
     if not deploy:
         generate_losses(net, net_config)
@@ -351,44 +457,31 @@ def forward(net, input_data, net_config, deploy=False):
     conf = [np.array(net.blobs["ip_soft_conf%d" % j].data)      # [(300,2,1,1)] * 5
             for j in range(net_config["max_len"])]
     return (bbox, conf)
-
+    
 
 def add_MMD_loss_layer(target_net, src_net, MMD_config):
-    MMD_layer_names = MMD_config['MMD_layers']
-    # mmd loss
-    for i in range(len(MMD_layer_names)):
-        bottom0 = MMD_layer_names[i]
-        layer_loss_weight = MMD_config['MMD_loss_weights'][i]
-        bottom1 = "src_"+bottom0
-        target_net.f(NumpyData(bottom1, data=src_net.blobs[bottom0].data))
-        bottom2 = "ip_soft_conf%d" % i
-        bottom3 = "src_" + bottom2
-        target_net.f(NumpyData(bottom3, data=src_net.blobs[bottom2].data))
-        # mean
-        top = bottom0+"_loss"
-        if 0:
-            target_net.f(str("""
-                  type: 'Python'
-                  name: '%s'
-                  top: '%s'
-                  bottom: '%s'
-                  bottom: '%s'
-                  loss_weight: %s
-                  python_param {
-                    module: 'train_boost'
-                    layer: 'MMDLossLayer'
-                  }
-                  """ % (top, top, bottom0, bottom1, layer_loss_weight)))
-        else:
-            target_net.f(str("""
-                      type: 'MMDLoss'
-                      name: '%s'
-                      top: '%s'
-                      bottom: '%s'
-                      bottom: '%s'
-                      loss_weight: %s
-                      """ % (top, top, bottom0, bottom1, layer_loss_weight) ))
+    # # # loss of ip split
+    for layers, loss_weight in zip(MMD_config['layers'], MMD_config['loss_weights']):
+        if loss_weight == 0:
+            continue
+        for bottom0 in layers:
+            bottom1 = 'src_' + bottom0
+            target_net.f(NumpyData(bottom1, data=src_net.blobs[bottom0].data))
+            top = bottom0 +'_loss'
+            target_net.f(MMDLoss(name=top, bottoms=[bottom0, bottom1], 
+                                        loss_weight=loss_weight))
 
+
+        
+def net_convert_ip_2_ip_split(src_net, tar_net, input_en, net_config):
+    forward(tar_net, input_en, net_config)
+    tar_net.copy_params_from(src_net)
+    for step in range(net_config["max_len"]):
+        copy_param_of_ip_split(src_net, tar_net, "dropout%d" % step, 
+                                250, "ip_conf%d"%step, 2)
+        copy_param_of_ip_split(src_net, tar_net, "dropout%d" % step, 
+                                250, "ip_bbox_unscaled%d"%step, 4)
+    return tar_net
 
 
 
@@ -419,13 +512,17 @@ def train(config):
 
     # # # init apollocaffe # # # 
     # source net
-    src_net = apollocaffe.ApolloNet()
+    src_net_ = apollocaffe.ApolloNet()
     net_config["ignore_label"] = -1
-    forward(src_net, re_test_gen.next(), net_config)
+    forward(src_net_, re_test_gen.next(), net_config, enable_ip_split=False)
     if solver["weights"]:
-        src_net.load(solver["weights"])
+        src_net_.load(solver["weights"])
     else:
-        src_net.load(googlenet.weights_file())
+        src_net_.load(googlenet.weights_file())
+
+    # transform inner product layer of src_net 
+    src_net = apollocaffe.ApolloNet()
+    net_convert_ip_2_ip_split(src_net_, src_net, re_test_gen.next(), net_config)
 
     # boost net with MMD loss layer
     boost_net = apollocaffe.ApolloNet()
@@ -437,7 +534,7 @@ def train(config):
     # reinspect net with MMD loss layer
     re_net = apollocaffe.ApolloNet()
     net_config["ignore_label"] = 1
-    forward(re_net, boost_test_gen.next(), net_config)
+    forward(re_net, re_test_gen.next(), net_config)
     add_MMD_loss_layer(re_net, src_net, MMD_config)
 
     # # # init log # # # 
@@ -475,9 +572,14 @@ def train(config):
             precision = np.sum(cc_list)/np.sum(cp_list)
             recall = np.sum(cc_list)/np.sum(ca_list)
             print 'hungarian loss:', np.mean(test_loss)
-            print input_en['imname'],
-            print boost_net.blobs['lstm_hidden0_loss'].data,
-            print boost_net.blobs['lstm_hidden0_loss'].diff
+            print input_en['imname']
+            for layers, loss_weight in zip(MMD_config['layers'], MMD_config['loss_weights']):
+                if loss_weight == 0:
+                    continue
+                print boost_net.blobs[layers[0]+'_loss'].diff[0],'*',
+                for layer in layers:
+                    print boost_net.blobs[layer+'_loss'].data[0],
+            print ''
             print 'iterate:  %6.d error, recall, F1: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
             
 
@@ -489,15 +591,19 @@ def train(config):
                 input_en = generate_input_en(imname, image_mean, net_config)
                 (bbox, conf) = forward(boost_net, input_en, net_config, deploy=True)
                 add_MMD_loss_layer(boost_net, src_net, MMD_config)
-                mmd_losses = [boost_net.blobs[x+'_loss'].data[0]
-                                         for x in MMD_config['MMD_layers']]
-                # print np.mean(mmd_losses),
+                mmd_losses = []
+                for layers, loss_weight in zip(MMD_config['layers'], MMD_config['loss_weights']):
+                    if loss_weight == 0:
+                      continue
+                    mmd_losses += [loss_weight*boost_net.blobs[x+'_loss'].data[0]
+                                         for x in layers]
                 boost_deploy_list.append({'imname':imname, 'bbox':bbox, 'conf':conf, 
                                         'MMDLoss':np.mean(mmd_losses)})
             boost_deploy_list = sorted(boost_deploy_list, 
                                     key=lambda x:x['MMDLoss'],reverse=solver['reverse'])[:solver['boost_iter']]
             thres = 0.9
             boot_train_gen = convert_deploy_2_train(boost_deploy_list, image_mean, net_config, threshold=thres)
+
 
         # # train # # 
         learning_rate = (solver["base_lr"] *
@@ -558,4 +664,4 @@ if __name__ == "__main__":
     main()
 
 
-# python train_boost.py --gpu=0 --config=config_boost.json  --weights=./data/brainwash_800000.h5
+# python train_boost.ip_split.py --gpu=0 --config=config_boost.ip_split.json  --weights=./data/brainwash_800000.h5
