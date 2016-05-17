@@ -127,6 +127,7 @@ def generate_input_en(imname, data_mean, net_config):
 def convert_deploy_2_train(boot_deploy_list, data_mean, net_config,
                                threshold=0.9, jitter=True, if_random=True):
     annos = []
+    cnt = 0
     pix_per_w = net_config["img_width"]/net_config["grid_width"]
     pix_per_h = net_config["img_height"]/net_config["grid_height"]
     for dic in boot_deploy_list:
@@ -160,6 +161,9 @@ def convert_deploy_2_train(boot_deploy_list, data_mean, net_config,
                 r.y2 = int(rect.cy + rect.height/2.)
                 anno.rects.append(r)
         annos.append(anno)
+        cnt += len(anno.rects)
+    print 'deployed',len(annos),'images with', cnt,'heads'
+
 
     while True:
         if if_random:
@@ -579,7 +583,7 @@ def train(config):
                 print boost_net.blobs[layers[0]+'_loss'].diff[0],'*',
                 for layer in layers:
                     print boost_net.blobs[layer+'_loss'].data[0],
-            print ''
+                print ''
             print 'iterate:  %6.d error, recall, F1: (%.3f %.3f) -> %.3f' % (i, 1-precision, recall, 2*precision*recall/(precision+recall))
             
 
@@ -602,7 +606,8 @@ def train(config):
             boost_deploy_list = sorted(boost_deploy_list, 
                                     key=lambda x:x['MMDLoss'],reverse=solver['reverse'])[:solver['boost_iter']]
             thres = 0.9
-            boot_train_gen = convert_deploy_2_train(boost_deploy_list, image_mean, net_config, threshold=thres)
+            boot_train_gen = convert_deploy_2_train(boost_deploy_list, image_mean, net_config, 
+                                                      threshold=thres, if_random=solver['random'])
 
 
         # # train # # 
