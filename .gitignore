@@ -1,3 +1,6 @@
-data/
+*.py~
 *.pyc
-*.swp
+tmp/*
+mutli_scene_data/*
+data/*
+*~
