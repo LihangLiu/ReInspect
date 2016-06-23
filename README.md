@@ -8,7 +8,7 @@ See <a href="https://github.com/LihangLiu93/Reinspect.report/blob/master/eccv201
 ReInspect depends on <a href="http://github.com/bvlc/caffe" target="_blank">Caffe</a> and requires
 the <a href="http://apollocaffe.com">ApolloCaffe</a> pull request. With ApolloCaffe installed, you can run ReInspect with:
 
-    $ git clone http://github.com/russell91/reinspect
+    $ git clone https://github.com/LihangLiu93/ReInspect.git
     $ cd reinspect
     $ python train_boost_ip_split.py --gpu=0 --config=config_boost_ip_split.json  --weights=./data/brainwash_800000.h5
 
