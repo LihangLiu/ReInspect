@@ -2,10 +2,8 @@
     "data": {
         "reinspect_train_idl": "./data/brainwash/brainwash_train.idl",
         "reinspect_test_idl": "./data/brainwash/brainwash_test.idl",
-        "____boost_test_idl_____": "./multi_scene_data/annnotation/second_carteen/test.idl",
-        "_____boost_idl_____": "./multi_scene_data/pre_data/images_640_480/second_carteens[01-03]/second_carteens[01-03].mov.txt",
-        "boost_test_idl": "./multi_scene_data/annnotation/laoximen/test.idl",
-        "boost_idl": "./multi_scene_data/pre_data/images_640_480/laoximen/laoximen.txt",
+        "boost_test_idl": "./multi_scene_data/annnotation/second_carteen/test.idl",
+        "boost_idl": "./multi_scene_data/pre_data/images_640_480/second_carteens[01-03]/second_carteens[01-03].mov.txt",
         "idl_mean": "./data/brainwash_mean.npy"
     },
     "solver": {
