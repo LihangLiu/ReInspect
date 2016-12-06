@@ -21,9 +21,13 @@ With ApolloCaffe installed, you can run ReInspect with:
 ## Data
 
 The data consists of:
+
 1) The source domain data from <a href="https://github.com/Russell91/ReInspect">Russell's project</a>, which this project is built on. The data can be found <a href="http://datasets.d2.mpi-inf.mpg.de/brainwash/brainwash.tar">here</a>.
+
 2) The target domain data collected for domain adaptation, please put the data from the following links into the corresponding directories.
+
 	dir:./multi_scene_data/annnotation/second_carteen/     link: https://pan.baidu.com/s/1c16O1Hm       password: d9kc 
+	
 	dir:./multi_scene_data/pre_data/images_640_480/second_carteens[01-03]/    link: https://pan.baidu.com/s/1dFqhGWh      password: rs9b
 
 ## Run
